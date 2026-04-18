@@ -128,7 +128,15 @@ export default async function AttendancePage({ searchParams }: AttendancePagePro
                     <td>{formatTimeLabel(row.time_in)}</td>
                     <td>{formatTimeLabel(row.time_out)}</td>
                     <td>
-                      <span className={row.status === "Late" ? "badge badge-warning" : "badge badge-success"}>
+                      <span
+                        className={
+                          row.status === "Late"
+                            ? "badge badge-warning"
+                            : row.status === "Absent"
+                              ? "badge badge-danger"
+                              : "badge badge-success"
+                        }
+                      >
                         {row.status}
                       </span>
                     </td>

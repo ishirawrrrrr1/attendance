@@ -71,6 +71,7 @@ export type AttendanceRules = {
   present_until: string;
   late_from: string;
   absent_from: string;
+  time_out_from: string;
   scan_cooldown_seconds: number;
 };
 
@@ -101,6 +102,7 @@ type AttendanceRuleRow = {
   present_until: string;
   late_from: string;
   absent_from: string;
+  time_out_from: string;
   scan_cooldown_seconds: number;
 };
 
@@ -145,6 +147,7 @@ const DEFAULT_ATTENDANCE_RULES: AttendanceRules = {
   present_until: "08:00:00",
   late_from: "08:15:00",
   absent_from: "10:00:00",
+  time_out_from: "17:00:00",
   scan_cooldown_seconds: 60
 };
 
@@ -152,6 +155,7 @@ const attendanceRulesSchema = z.object({
   present_until: z.string().regex(/^\d{2}:\d{2}$/),
   late_from: z.string().regex(/^\d{2}:\d{2}$/),
   absent_from: z.string().regex(/^\d{2}:\d{2}$/),
+  time_out_from: z.string().regex(/^\d{2}:\d{2}$/),
   scan_cooldown_seconds: z.coerce.number().int().min(0).max(3600)
 });
 
@@ -161,6 +165,10 @@ function getSupabase() {
 
 function isWithinRange(value: string, start: string, end: string) {
   return value >= start && value <= end;
+}
+
+function isMissingTimeOutRuleColumn(message: string) {
+  return message.includes("time_out_from");
 }
 
 function sortUsers(users: AppUser[]) {
@@ -912,11 +920,39 @@ export async function getAttendanceRules(): Promise<AttendanceRules> {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("app_settings")
-    .select("id, present_until, late_from, absent_from, scan_cooldown_seconds")
+    .select("id, present_until, late_from, absent_from, time_out_from, scan_cooldown_seconds")
     .eq("id", 1)
     .maybeSingle();
 
   if (error) {
+    if (isMissingTimeOutRuleColumn(error.message)) {
+      const { data: legacyData, error: legacyError } = await supabase
+        .from("app_settings")
+        .select("id, present_until, late_from, absent_from, scan_cooldown_seconds")
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (legacyError) {
+        throw new Error(`Unable to load attendance rules from Supabase: ${legacyError.message}`);
+      }
+
+      const legacyRow = (legacyData as Omit<AttendanceRuleRow, "time_out_from"> | null) ?? null;
+
+      if (!legacyRow) {
+        return DEFAULT_ATTENDANCE_RULES;
+      }
+
+      return {
+        present_until: legacyRow.present_until,
+        late_from: legacyRow.late_from,
+        absent_from: legacyRow.absent_from,
+        time_out_from: DEFAULT_ATTENDANCE_RULES.time_out_from,
+        scan_cooldown_seconds: Number(
+          legacyRow.scan_cooldown_seconds ?? DEFAULT_ATTENDANCE_RULES.scan_cooldown_seconds
+        )
+      };
+    }
+
     throw new Error(`Unable to load attendance rules from Supabase: ${error.message}`);
   }
 
@@ -930,6 +966,7 @@ export async function getAttendanceRules(): Promise<AttendanceRules> {
     present_until: row.present_until,
     late_from: row.late_from,
     absent_from: row.absent_from,
+    time_out_from: row.time_out_from ?? DEFAULT_ATTENDANCE_RULES.time_out_from,
     scan_cooldown_seconds: Number(row.scan_cooldown_seconds ?? DEFAULT_ATTENDANCE_RULES.scan_cooldown_seconds)
   };
 }
@@ -939,6 +976,7 @@ export async function updateAttendanceRules(formData: FormData) {
     present_until: formValue(formData, "presentUntil"),
     late_from: formValue(formData, "lateFrom"),
     absent_from: formValue(formData, "absentFrom"),
+    time_out_from: formValue(formData, "timeOutFrom"),
     scan_cooldown_seconds: formValue(formData, "scanCooldownSeconds")
   });
 
@@ -950,9 +988,10 @@ export async function updateAttendanceRules(formData: FormData) {
   const presentUntil = toDatabaseTime(parsed.present_until);
   const lateFrom = toDatabaseTime(parsed.late_from);
   const absentFrom = toDatabaseTime(parsed.absent_from);
+  const timeOutFrom = toDatabaseTime(parsed.time_out_from);
 
-  if (!(presentUntil < lateFrom && lateFrom < absentFrom)) {
-    throw new Error("Present time must be earlier than Late, and Late must be earlier than Absent.");
+  if (!(presentUntil < lateFrom && lateFrom < absentFrom && absentFrom < timeOutFrom)) {
+    throw new Error("Present must be earlier than Late, Late earlier than Absent, and Absent earlier than Time Out.");
   }
 
   const supabase = getSupabase();
@@ -962,6 +1001,7 @@ export async function updateAttendanceRules(formData: FormData) {
       present_until: presentUntil,
       late_from: lateFrom,
       absent_from: absentFrom,
+      time_out_from: timeOutFrom,
       scan_cooldown_seconds: parsed.scan_cooldown_seconds
     },
     {
@@ -970,6 +1010,10 @@ export async function updateAttendanceRules(formData: FormData) {
   );
 
   if (error) {
+    if (isMissingTimeOutRuleColumn(error.message)) {
+      throw new Error("Supabase is missing the new time_out_from column. Run the latest SQL schema update first.");
+    }
+
     throw new Error(`Unable to save attendance rules in Supabase: ${error.message}`);
   }
 }
@@ -1021,6 +1065,20 @@ export async function processAttendanceScan(uid: string, pin: string) {
   const existing = (existingData as Pick<AttendanceRow, "id" | "attendance_date" | "time_in" | "time_out"> | null) ?? null;
 
   if (!existing) {
+    if (now.time >= rules.time_out_from) {
+      const { error } = await supabase.from("attendance_records").insert({
+        user_id: user.id,
+        attendance_date: now.date,
+        status: "Absent"
+      });
+
+      if (error) {
+        throw new Error(`Unable to save absent attendance to Supabase: ${error.message}`);
+      }
+
+      return { ok: true as const, message: "SUCCESS", action: "ABSENT" };
+    }
+
     const status: AttendanceStatus =
       now.time >= rules.absent_from
         ? "Absent"
@@ -1043,6 +1101,14 @@ export async function processAttendanceScan(uid: string, pin: string) {
   }
 
   if (existing.time_out) {
+    return { ok: false as const, message: "DENIED" };
+  }
+
+  if (!existing.time_in) {
+    return { ok: false as const, message: "DENIED" };
+  }
+
+  if (now.time < rules.time_out_from) {
     return { ok: false as const, message: "DENIED" };
   }
 
@@ -1214,6 +1280,7 @@ export async function getSettingsSnapshot() {
     presentUntil: rules.present_until,
     lateFrom: rules.late_from,
     absentFrom: rules.absent_from,
+    timeOutFrom: rules.time_out_from,
     cooldown: rules.scan_cooldown_seconds,
     database: "Supabase"
   };

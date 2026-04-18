@@ -735,6 +735,12 @@ select {
   gap: 1rem;
 }
 
+.rules-time-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .rules-extra-block {
   display: grid;
   gap: 0.45rem;
@@ -1349,7 +1355,8 @@ select {
 
 @media (max-width: 1100px) {
   .grid-3,
-  .grid-2 {
+  .grid-2,
+  .rules-time-grid {
     grid-template-columns: 1fr;
   }
 

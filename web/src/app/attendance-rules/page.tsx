@@ -27,7 +27,7 @@ export default async function AttendanceRulesPage({ searchParams }: AttendanceRu
         </div>
 
         <form action={updateAttendanceRulesAction} className="rules-form">
-          <div className="grid grid-3">
+          <div className="rules-time-grid">
             <div className="settings-panel-block">
               <div className="settings-panel-kicker">Present</div>
               <div className="field">
@@ -77,6 +77,25 @@ export default async function AttendanceRulesPage({ searchParams }: AttendanceRu
                 />
               </div>
               <div className="field-note">Students scanned from this time onward will be marked as Absent.</div>
+            </div>
+
+            <div className="settings-panel-block">
+              <div className="settings-panel-kicker">Time Out</div>
+              <div className="field">
+                <label htmlFor="timeOutFrom">Time Out From</label>
+                <input
+                  className="input"
+                  defaultValue={rules.time_out_from.slice(0, 5)}
+                  id="timeOutFrom"
+                  name="timeOutFrom"
+                  required
+                  suppressHydrationWarning
+                  type="time"
+                />
+              </div>
+              <div className="field-note">
+                Time-out is allowed only from this time onward and only when a valid time-in already exists.
+              </div>
             </div>
           </div>
 

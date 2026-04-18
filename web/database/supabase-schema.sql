@@ -85,21 +85,43 @@ create table if not exists app_settings (
   present_until time not null default '08:00:00',
   late_from time not null default '08:15:00',
   absent_from time not null default '10:00:00',
+  time_out_from time not null default '17:00:00',
   scan_cooldown_seconds integer not null default 60,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (present_until < late_from),
   check (late_from < absent_from),
+  check (absent_from < time_out_from),
   check (scan_cooldown_seconds >= 0)
 );
 
-insert into app_settings (id, present_until, late_from, absent_from, scan_cooldown_seconds)
-values (1, '08:00:00', '08:15:00', '10:00:00', 60)
+alter table app_settings
+add column if not exists time_out_from time default '17:00:00';
+
+update app_settings
+set time_out_from = '17:00:00'
+where time_out_from is null;
+
+alter table app_settings
+alter column time_out_from set default '17:00:00';
+
+alter table app_settings
+alter column time_out_from set not null;
+
+alter table app_settings
+drop constraint if exists app_settings_absent_time_out_check;
+
+alter table app_settings
+add constraint app_settings_absent_time_out_check check (absent_from < time_out_from);
+
+insert into app_settings (id, present_until, late_from, absent_from, time_out_from, scan_cooldown_seconds)
+values (1, '08:00:00', '08:15:00', '10:00:00', '17:00:00', 60)
 on conflict (id) do update
 set
   present_until = excluded.present_until,
   late_from = excluded.late_from,
   absent_from = excluded.absent_from,
+  time_out_from = excluded.time_out_from,
   scan_cooldown_seconds = excluded.scan_cooldown_seconds;
 
 create or replace function set_updated_at()
